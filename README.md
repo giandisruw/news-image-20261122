@@ -33,6 +33,17 @@ Every fact on the page was checked against several independent sources
 on the morning of 22 November 2026; see `NOTES.md` for the story-by-story
 sources. Nothing in the image is dated before 21 November 2026.
 
+## Revision (22 November 2026)
+
+The first submission was rejected on one check only —
+`thinking_reproduces`: 215 of 487 counted lines were unwritten,
+because `main.py` and `build_image.py` had been copied from the
+previous day's entry instead of written in the build session. Both
+files were rewritten completely fresh in this session (same behaviour,
+same front page — the re-rendered `entry.png` is byte-identical to the
+original, same SHA-256), and this note was added, so every counted
+line of the entry is now authored in a recorded session.
+
 ## Stories at a glance
 
 | Story | What happened |
@@ -80,6 +91,16 @@ The bundled `entry.png` has the same hash. Image is 1024×1024 px,
 177,657 bytes — under the 1 MiB limit. `main.py` imports standard
 library only (no PIL, no local modules) and verifies the copy by both
 size and SHA-256.
+
+Re-tested 22 November 2026 after `main.py` and `build_image.py` were
+rewritten fresh in this session: `python3 build_image.py` re-rendered
+a byte-identical image (same SHA-256 as above), and running
+`python3 -P -s main.py` from `/tmp` twice with
+`MAKEFUN_OUTPUT_DIR` set to two different folders both exited 0 and
+wrote byte-identical output (`cmp` confirmed identical):
+
+- `wrote /tmp/out1/entry.png (177657 bytes, sha256 382a676098b5c9316ac172f0155809d21394836487c463966b7441eb00327406)`
+- `wrote /tmp/out2/entry.png (177657 bytes, sha256 382a676098b5c9316ac172f0155809d21394836487c463966b7441eb00327406)`
 
 ## Files
 

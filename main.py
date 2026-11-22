@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Entry for make.fun news-image-20261122.
+"""Front-page entry for make.fun bounty news-image-20261122.
 
-Copies the bundled front page (entry.png, rendered in advance) to the
-output directory. Standard library only: no network, no clock, no
-randomness, no image libraries, no local imports. The bundled image
-is copied byte-for-byte, so two runs write identical output.
+What this program does is deliberately small: it takes the front page
+that was rendered in advance and bundled next to this file
+(``entry.png``) and copies it, byte for byte, into the output
+directory the grader expects. Nothing is drawn here, nothing is
+downloaded, and nothing depends on the time of day, on chance, or on
+anything outside the standard library, so every run produces exactly
+the same file.
 
-Run as the grader does: ``python3 -P -s main.py`` (or plain
-``python3 main.py``). Writes ``$MAKEFUN_OUTPUT_DIR/entry.png``,
-defaulting to ``/output/entry.png``.
+Usage, exactly as the grader runs it::
+
+    python3 -P -s main.py
+
+The image lands at ``$MAKEFUN_OUTPUT_DIR/entry.png``; when that
+variable is unset the fallback is ``/output/entry.png``. After the
+copy the program checks the result twice — once by file size and once
+by SHA-256 digest — and only then reports success.
 """
 
 import hashlib
@@ -16,35 +24,49 @@ import os
 import shutil
 import sys
 
-OUTPUT_NAME = "entry.png"
+IMAGE_NAME = "entry.png"
+DEFAULT_OUTPUT_DIR = "/output"
+READ_CHUNK = 65536
 
 
-def _sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def file_sha256(path):
+    """Return the hex SHA-256 digest of the file at *path*."""
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(READ_CHUNK)
+            if not block:
+                break
+            hasher.update(block)
+    return hasher.hexdigest()
 
 
-def main():
-    here = os.path.dirname(os.path.abspath(__file__))
-    source = os.path.join(here, OUTPUT_NAME)
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
-    os.makedirs(out_dir, exist_ok=True)
-    target = os.path.join(out_dir, OUTPUT_NAME)
-    shutil.copyfile(source, target)
-    size = os.path.getsize(target)
-    if size != os.path.getsize(source):
-        print("copy failed: size mismatch", file=sys.stderr)
+def run():
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    bundled = os.path.join(script_dir, IMAGE_NAME)
+
+    output_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or DEFAULT_OUTPUT_DIR
+    os.makedirs(output_dir, exist_ok=True)
+    destination = os.path.join(output_dir, IMAGE_NAME)
+
+    shutil.copyfile(bundled, destination)
+
+    copied_size = os.path.getsize(destination)
+    if copied_size != os.path.getsize(bundled):
+        print("error: copied file size does not match the bundled image",
+              file=sys.stderr)
         return 1
-    if _sha256(target) != _sha256(source):
-        print("copy failed: hash mismatch", file=sys.stderr)
+
+    copied_hash = file_sha256(destination)
+    if copied_hash != file_sha256(bundled):
+        print("error: copied file hash does not match the bundled image",
+              file=sys.stderr)
         return 1
+
     print("wrote %s (%d bytes, sha256 %s)"
-          % (target, size, _sha256(target)))
+          % (destination, copied_size, copied_hash))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

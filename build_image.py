@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Draw the front page for Sunday 22 November 2026.
+"""Render the front page for Sunday 22 November 2026.
 
-Self-contained: reads nothing but the story text below, uses only the
-standard library plus Pillow, touches no network, no clock and no
-randomness, so running it twice produces identical bytes. Writes
-entry.png next to this file (or to the path in --out).
+This script draws the whole newspaper page — nameplate, lead story,
+seven further stories and a closing news tape — and saves it as
+``entry.png`` next to this file (or to the path given with ``--out``).
+
+It is fully self-contained and deterministic: the only input is the
+story text written below, the only libraries are the standard library
+and Pillow, and there is no network access, no clock reading and no
+randomness. Running it twice therefore produces byte-identical PNGs.
+
+    python3 build_image.py
 """
 
 import argparse
@@ -13,277 +19,322 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-PAGE_W = 1024
-PAGE_H = 1024
-SIDE = 36
-COL_W = PAGE_W - 2 * SIDE  # 952
+# --- page geometry -------------------------------------------------------
+WIDTH = 1024
+HEIGHT = 1024
+MARGIN = 36
+TEXT_WIDTH = WIDTH - 2 * MARGIN  # 952
 
+# --- palette -------------------------------------------------------------
 PAPER = (248, 244, 232)
 INK = (17, 17, 17)
-ACCENT = (138, 20, 20)
-MUTED = (98, 92, 82)
-BAND = (26, 26, 26)
-BAND_TEXT = (241, 239, 231)
+RED = (138, 20, 20)
+GREY = (98, 92, 82)
+TAPE_BG = (26, 26, 26)
+TAPE_FG = (241, 239, 231)
 
-LIB = "/usr/share/fonts/truetype/liberation"
-
-
-def load(name, size):
-    return ImageFont.truetype(os.path.join(LIB, name), size)
+FONT_DIR = "/usr/share/fonts/truetype/liberation"
 
 
-SERIF_BOLD = "LiberationSerif-Bold.ttf"
-SERIF_REG = "LiberationSerif-Regular.ttf"
-SERIF_ITAL = "LiberationSerif-Italic.ttf"
-SANS_BOLD = "LiberationSans-Bold.ttf"
-SANS_REG = "LiberationSans-Regular.ttf"
-
-F_NAMEPLATE = load(SERIF_BOLD, 80)
-F_DATELINE = load(SANS_BOLD, 26)
-F_STRAP = load(SANS_REG, 14)
-F_LABEL = load(SANS_BOLD, 19)
-F_TOP_HEAD = load(SERIF_BOLD, 48)
-F_TOP_DEK = load(SERIF_ITAL, 22)
-F_TOP_TEXT = load(SERIF_REG, 16)
-F_STRIP = load(SANS_BOLD, 14)
-F_HEAD = load(SERIF_BOLD, 29)
-F_HEAD_SMALL = load(SERIF_BOLD, 23)
-F_TEXT = load(SERIF_REG, 16)
-F_TEXT_SMALL = load(SERIF_REG, 15)
-F_TAPE = load(SANS_BOLD, 15)
-F_FOOT = load(SANS_REG, 13)
+def font(filename, size):
+    """Load one Liberation font at the requested point size."""
+    return ImageFont.truetype(os.path.join(FONT_DIR, filename), size)
 
 
-def fit_lines(draw, text, face, width):
-    """Greedy wrap of one paragraph into lines no wider than width."""
-    out = []
-    for chunk in text.split("\n"):
-        words = chunk.split()
+FONTS = {
+    "nameplate": font("LiberationSerif-Bold.ttf", 80),
+    "dateline": font("LiberationSans-Bold.ttf", 26),
+    "strap": font("LiberationSans-Regular.ttf", 14),
+    "kicker": font("LiberationSans-Bold.ttf", 19),
+    "lead_head": font("LiberationSerif-Bold.ttf", 48),
+    "lead_dek": font("LiberationSerif-Italic.ttf", 22),
+    "lead_body": font("LiberationSerif-Regular.ttf", 16),
+    "ticker": font("LiberationSans-Bold.ttf", 14),
+    "head": font("LiberationSerif-Bold.ttf", 29),
+    "head_small": font("LiberationSerif-Bold.ttf", 23),
+    "body": font("LiberationSerif-Regular.ttf", 16),
+    "body_small": font("LiberationSerif-Regular.ttf", 15),
+    "tape": font("LiberationSans-Bold.ttf", 15),
+    "footer": font("LiberationSans-Regular.ttf", 13),
+}
+
+
+# --- text helpers --------------------------------------------------------
+
+
+def wrap(draw, text, face, width):
+    """Split *text* greedily into lines that fit *width* pixels."""
+    lines = []
+    for paragraph in text.split("\n"):
+        words = paragraph.split()
         if not words:
-            out.append("")
+            lines.append("")
             continue
-        line = words[0]
+        current = words[0]
         for word in words[1:]:
-            test = line + " " + word
-            if draw.textlength(test, font=face) <= width:
-                line = test
+            candidate = current + " " + word
+            if draw.textlength(candidate, font=face) <= width:
+                current = candidate
             else:
-                out.append(line)
-                line = word
-        out.append(line)
-    return out
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
 
 
-def draw_para(draw, x, y, width, text, face, step, colour=INK):
-    for line in fit_lines(draw, text, face, width):
+def paragraph(draw, x, y, width, text, face, leading, colour=INK):
+    """Draw a wrapped paragraph; return the y just below its last line."""
+    for line in wrap(draw, text, face, width):
         draw.text((x, y), line, font=face, fill=colour)
-        y += step
+        y += leading
     return y
 
 
-def hline(draw, y, weight=2, x0=None, x1=None):
-    x0 = SIDE if x0 is None else x0
-    x1 = PAGE_W - SIDE if x1 is None else x1
-    draw.line([(x0, y), (x1, y)], fill=INK, width=weight)
+def rule(draw, y, weight=2, x0=None, x1=None):
+    """Draw a horizontal rule; return the y just below it."""
+    left = MARGIN if x0 is None else x0
+    right = WIDTH - MARGIN if x1 is None else x1
+    draw.line([(left, y), (right, y)], fill=INK, width=weight)
     return y + weight
 
 
-def double_hline(draw, y):
-    hline(draw, y, 3)
-    hline(draw, y + 6, 1)
+def double_rule(draw, y):
+    """The thick-plus-thin rule under the nameplate."""
+    rule(draw, y, 3)
+    rule(draw, y + 6, 1)
     return y + 10
 
 
-def draw_label(draw, x, y, text):
-    draw.text((x, y), text, font=F_LABEL, fill=ACCENT)
+def kicker(draw, x, y, text):
+    """Draw a red section label; return the y below it."""
+    draw.text((x, y), text, font=FONTS["kicker"], fill=RED)
     return y + 26
 
 
-def draw_story(draw, x, y, width, label, headline, body,
-               head_face, head_step, body_face=F_TEXT, body_step=20):
-    y = draw_label(draw, x, y, label)
-    for line in fit_lines(draw, headline, head_face, width):
+def story(draw, x, y, width, label, headline, body,
+          head_face, head_leading, body_face=None, body_leading=20):
+    """Draw one story block (label, headline, body); return the y below."""
+    y = kicker(draw, x, y, label)
+    for line in wrap(draw, headline, head_face, width):
         draw.text((x, y), line, font=head_face, fill=INK)
-        y += head_step
+        y += head_leading
     y += 2
-    return draw_para(draw, x, y, width, body, body_face, body_step)
+    face = body_face if body_face is not None else FONTS["body"]
+    return paragraph(draw, x, y, width, body, face, body_leading)
 
 
-# ---------------------------------------------------------------- stories
+def centred(draw, y, text, face, colour):
+    """Draw *text* centred on the page at height *y*."""
+    width = draw.textlength(text, font=face)
+    draw.text(((WIDTH - width) / 2, y), text, font=face, fill=colour)
 
-TOP_LABEL = "GULF OF FINLAND  \u2014  THE BALTIC SEA"
-TOP_HEAD = "DRONES SET RUSSIAN SHIP ABLAZE"
-TOP_DEK = ("Finland says Ukraine was likely behind the strike on the "
-           "sanctioned Sparta II \u2014 as the war's shadow spreads "
-           "across the Baltic.")
-TOP_LEFT = ("GULF OF FINLAND \u2014 Two drones struck the sanctioned "
-            "Russian cargo ship Sparta II on Saturday morning, west of "
-            "Gogland island. The ship caught fire and drifted into "
-            "Finnish waters.")
-TOP_RIGHT = ("All 16 crew were evacuated to lifeboats and then to a "
-             "nearby Russian ship. Finland tightened air and sea rules "
-             "in the eastern gulf, and a Russian helicopter was also "
-             "reported inside Finnish airspace.")
-TOP_STRIP = ("2 DRONES HIT SPARTA II  \u00b7  16 CREW SAFE  \u00b7  "
-             "BOUND FOR KALININGRAD  \u00b7  US-SANCTIONED SHIP")
 
-PAIR_A = [
-    ("KRYVYI RIH",
-     "DOUBLE-TAP KILLS TWO",
-     "A Russian attack on President Zelenskyy's hometown killed a "
-     "7-year-old boy and a 20-year-old paramedic and wounded 60, "
-     "hitting rescuers as they worked. About 25 apartment blocks, a "
-     "hospital and schools were damaged."),
-    ("SINALOA",
-     "MEXICO SEIZES \u2018EL CHAPO ISIDRO\u2019",
-     "Mexican forces captured FBI most-wanted cartel boss Fausto "
-     "Isidro Meza Flores in Guasave, with US intelligence help. "
-     "Eleven people died in the fighting \u2014 four soldiers and "
-     "seven gunmen \u2014 as cartel roadblocks burned."),
+# --- the stories ---------------------------------------------------------
+# Every fact below was checked against several independent sources on
+# the morning of 22 November 2026; see NOTES.md for the sources.
+
+LEAD = {
+    "label": "GULF OF FINLAND  —  THE BALTIC SEA",
+    "headline": "DRONES SET RUSSIAN SHIP ABLAZE",
+    "dek": ("Finland says Ukraine was likely behind the strike on the "
+            "sanctioned Sparta II — as the war's shadow spreads "
+            "across the Baltic."),
+    "left": ("GULF OF FINLAND — Two drones struck the sanctioned "
+             "Russian cargo ship Sparta II on Saturday morning, west of "
+             "Gogland island. The ship caught fire and drifted into "
+             "Finnish waters."),
+    "right": ("All 16 crew were evacuated to lifeboats and then to a "
+              "nearby Russian ship. Finland tightened air and sea rules "
+              "in the eastern gulf, and a Russian helicopter was also "
+              "reported inside Finnish airspace."),
+    "strip": ("2 DRONES HIT SPARTA II  ·  16 CREW SAFE  ·  "
+              "BOUND FOR KALININGRAD  ·  US-SANCTIONED SHIP"),
+}
+
+ROW_TWO = [
+    {
+        "label": "KRYVYI RIH",
+        "headline": "DOUBLE-TAP KILLS TWO",
+        "body": ("A Russian attack on President Zelenskyy's hometown killed a "
+                 "7-year-old boy and a 20-year-old paramedic and wounded 60, "
+                 "hitting rescuers as they worked. About 25 apartment blocks, a "
+                 "hospital and schools were damaged."),
+    },
+    {
+        "label": "SINALOA",
+        "headline": "MEXICO SEIZES ‘EL CHAPO ISIDRO’",
+        "body": ("Mexican forces captured FBI most-wanted cartel boss Fausto "
+                 "Isidro Meza Flores in Guasave, with US intelligence help. "
+                 "Eleven people died in the fighting — four soldiers and "
+                 "seven gunmen — as cartel roadblocks burned."),
+    },
 ]
 
-TRIO = [
-    ("PERU",
-     "6.9 QUAKE SHAKES PERU",
-     "A magnitude 6.9 earthquake struck central Peru at 00:09 UTC on "
-     "Saturday, 34 km north of Junin. It was felt in Lima; no damage "
-     "or casualties were reported."),
-    ("ANTALYA",
-     "COP31 PAST DEADLINE",
-     "Climate talks ran into overtime with no deal, as the draft "
-     "dropped all mention of fossil fuels. The EU warned it would "
-     "be \u201ca good deal or no deal at all\u201d."),
-    ("WASHINGTON",
-     "FBI DATABASE HACKED",
-     "Hackers broke into the FBI's National Crime Information "
-     "Center, used by police across the US. Trump called it "
-     "\u201cnot good\u201d; it is the second FBI breach in months."),
+ROW_THREE = [
+    {
+        "label": "PERU",
+        "headline": "6.9 QUAKE SHAKES PERU",
+        "body": ("A magnitude 6.9 earthquake struck central Peru at 00:09 UTC on "
+                 "Saturday, 34 km north of Junin. It was felt in Lima; no damage "
+                 "or casualties were reported."),
+    },
+    {
+        "label": "ANTALYA",
+        "headline": "COP31 PAST DEADLINE",
+        "body": ("Climate talks ran into overtime with no deal, as the draft "
+                 "dropped all mention of fossil fuels. The EU warned it would "
+                 "be “a good deal or no deal at all”."),
+    },
+    {
+        "label": "WASHINGTON",
+        "headline": "FBI DATABASE HACKED",
+        "body": ("Hackers broke into the FBI's National Crime Information "
+                 "Center, used by police across the US. Trump called it "
+                 "“not good”; it is the second FBI breach in months."),
+    },
 ]
 
-PAIR_B = [
-    ("TOKYO",
-     "ASIAN MARKETS PLUNGE",
-     "Japan's Nikkei fell 5.06% and South Korea's Kospi 5.21% on "
-     "Friday as the AI sell-off spread from Wall Street. Taiwan's "
-     "Taiex lost 6.2% in a day and 17.5% in the week."),
-    ("BASRA",
-     "PLANT FIRE KILLS FOUR",
-     "At least four people were killed and 35 injured when a gas "
-     "pipeline blast set the Hartha power station ablaze on "
-     "Saturday. The fire spread to nearby homes."),
+ROW_FOUR = [
+    {
+        "label": "TOKYO",
+        "headline": "ASIAN MARKETS PLUNGE",
+        "body": ("Japan's Nikkei fell 5.06% and South Korea's Kospi 5.21% on "
+                 "Friday as the AI sell-off spread from Wall Street. Taiwan's "
+                 "Taiex lost 6.2% in a day and 17.5% in the week."),
+    },
+    {
+        "label": "BASRA",
+        "headline": "PLANT FIRE KILLS FOUR",
+        "body": ("At least four people were killed and 35 injured when a gas "
+                 "pipeline blast set the Hartha power station ablaze on "
+                 "Saturday. The fire spread to nearby homes."),
+    },
 ]
 
-TAPE_LINES = [
-    "HORMUZ \u00b7 Two more tankers hit by unknown projectiles near "
-    "Khasab on Saturday, 50 minutes apart \u00b7 No casualties reported",
-    "SHENZHEN \u00b7 Trump posts \u201cThe Great Powers 1945, 2026\u201d, "
+TAPE = [
+    "HORMUZ · Two more tankers hit by unknown projectiles near "
+    "Khasab on Saturday, 50 minutes apart · No casualties reported",
+    "SHENZHEN · Trump posts “The Great Powers 1945, 2026”, "
     "pairing Yalta with his summit with Xi and Putin",
-    "KYIV \u00b7 Zelenskyy rebukes Trump for calling Putin a \u2018friend\u2019 "
-    "\u2014 \u201cTo us, he is the killer\u201d",
+    "KYIV · Zelenskyy rebukes Trump for calling Putin a ‘friend’ "
+    "— “To us, he is the killer”",
 ]
 
+FOOTER = ("REPORTED 21–22 NOVEMBER 2026  ·  SOURCES: REUTERS, AP, "
+          "CNN, USGS, UKMTO, IRAQ SECURITY MEDIA CELL")
 
-def render():
-    img = Image.new("RGB", (PAGE_W, PAGE_H), PAPER)
-    d = ImageDraw.Draw(img)
 
-    # ---- nameplate -----------------------------------------------------
+# --- layout --------------------------------------------------------------
+
+
+def build_page():
+    page = Image.new("RGB", (WIDTH, HEIGHT), PAPER)
+    draw = ImageDraw.Draw(page)
+
+    # Nameplate -----------------------------------------------------------
     y = 20
-    name = "THE WORLD"
-    nw = d.textlength(name, font=F_NAMEPLATE)
-    d.text(((PAGE_W - nw) / 2, y), name, font=F_NAMEPLATE, fill=INK)
+    centred(draw, y, "THE WORLD", FONTS["nameplate"], INK)
     y += 86
-    dateline = "SUNDAY  22  NOVEMBER  2026"
-    dw = d.textlength(dateline, font=F_DATELINE)
-    d.text(((PAGE_W - dw) / 2, y), dateline, font=F_DATELINE, fill=ACCENT)
+    centred(draw, y, "SUNDAY  22  NOVEMBER  2026", FONTS["dateline"], RED)
     y += 34
-    strap = "THE DAY\u2019S WORLD NEWS IN ONE PAGE"
-    sw = d.textlength(strap, font=F_STRAP)
-    d.text(((PAGE_W - sw) / 2, y), strap, font=F_STRAP, fill=MUTED)
+    centred(draw, y, "THE DAY’S WORLD NEWS IN ONE PAGE",
+            FONTS["strap"], GREY)
     y += 18
-    y = double_hline(d, y)
+    y = double_rule(draw, y)
     y += 4
 
-    # ---- top story -----------------------------------------------------
-    y = draw_label(d, SIDE, y, TOP_LABEL)
-    for line in fit_lines(d, TOP_HEAD, F_TOP_HEAD, COL_W):
-        d.text((SIDE, y), line, font=F_TOP_HEAD, fill=INK)
+    # Lead story ----------------------------------------------------------
+    y = kicker(draw, MARGIN, y, LEAD["label"])
+    for line in wrap(draw, LEAD["headline"], FONTS["lead_head"], TEXT_WIDTH):
+        draw.text((MARGIN, y), line, font=FONTS["lead_head"], fill=INK)
         y += 54
     y += 2
-    y = draw_para(d, SIDE, y, COL_W, TOP_DEK, F_TOP_DEK, 27)
+    y = paragraph(draw, MARGIN, y, TEXT_WIDTH, LEAD["dek"],
+                  FONTS["lead_dek"], 27)
     y += 6
-    half = (COL_W - 24) // 2
-    end_l = draw_para(d, SIDE, y, half, TOP_LEFT, F_TOP_TEXT, 20)
-    end_r = draw_para(d, SIDE + half + 24, y, half, TOP_RIGHT, F_TOP_TEXT, 20)
-    y = max(end_l, end_r) + 5
-    sw = d.textlength(TOP_STRIP, font=F_STRIP)
-    d.text(((PAGE_W - sw) / 2, y), TOP_STRIP, font=F_STRIP, fill=ACCENT)
+    column = (TEXT_WIDTH - 24) // 2
+    left_end = paragraph(draw, MARGIN, y, column, LEAD["left"],
+                         FONTS["lead_body"], 20)
+    right_end = paragraph(draw, MARGIN + column + 24, y, column,
+                          LEAD["right"], FONTS["lead_body"], 20)
+    y = max(left_end, right_end) + 5
+    centred(draw, y, LEAD["strip"], FONTS["ticker"], RED)
     y += 20
-    y = hline(d, y, 2)
+    y = rule(draw, y, 2)
     y += 6
 
-    # ---- pair A: two stories ------------------------------------------
-    half = (COL_W - 28) // 2
-    e1 = draw_story(d, SIDE, y, half, PAIR_A[0][0], PAIR_A[0][1],
-                    PAIR_A[0][2], F_HEAD, 33)
-    e2 = draw_story(d, SIDE + half + 28, y, half, PAIR_A[1][0],
-                    PAIR_A[1][1], PAIR_A[1][2], F_HEAD, 33)
-    y = max(e1, e2) + 3
-    y = hline(d, y, 1)
+    # Two stories ---------------------------------------------------------
+    column = (TEXT_WIDTH - 28) // 2
+    first = story(draw, MARGIN, y, column,
+                  ROW_TWO[0]["label"], ROW_TWO[0]["headline"],
+                  ROW_TWO[0]["body"], FONTS["head"], 33)
+    second = story(draw, MARGIN + column + 28, y, column,
+                   ROW_TWO[1]["label"], ROW_TWO[1]["headline"],
+                   ROW_TWO[1]["body"], FONTS["head"], 33)
+    y = max(first, second) + 3
+    y = rule(draw, y, 1)
     y += 6
 
-    # ---- trio: three stories ------------------------------------------
-    third = (COL_W - 2 * 24) // 3
+    # Three stories -------------------------------------------------------
+    third = (TEXT_WIDTH - 2 * 24) // 3
     ends = []
-    for i, (label, head, body) in enumerate(TRIO):
-        x = SIDE + i * (third + 24)
-        ends.append(draw_story(d, x, y, third, label, head, body,
-                               F_HEAD_SMALL, 27, F_TEXT_SMALL, 18))
+    for i, item in enumerate(ROW_THREE):
+        x = MARGIN + i * (third + 24)
+        ends.append(story(draw, x, y, third,
+                          item["label"], item["headline"], item["body"],
+                          FONTS["head_small"], 27,
+                          FONTS["body_small"], 18))
     y = max(ends) + 3
-    y = hline(d, y, 1)
+    y = rule(draw, y, 1)
     y += 6
 
-    # ---- pair B: two stories ------------------------------------------
-    half = (COL_W - 28) // 2
-    e1 = draw_story(d, SIDE, y, half, PAIR_B[0][0], PAIR_B[0][1],
-                    PAIR_B[0][2], F_HEAD, 33, F_TEXT, 19)
-    e2 = draw_story(d, SIDE + half + 28, y, half, PAIR_B[1][0],
-                    PAIR_B[1][1], PAIR_B[1][2], F_HEAD, 33, F_TEXT, 19)
-    y = max(e1, e2) + 4
+    # Two stories ---------------------------------------------------------
+    column = (TEXT_WIDTH - 28) // 2
+    first = story(draw, MARGIN, y, column,
+                  ROW_FOUR[0]["label"], ROW_FOUR[0]["headline"],
+                  ROW_FOUR[0]["body"], FONTS["head"], 33,
+                  FONTS["body"], 19)
+    second = story(draw, MARGIN + column + 28, y, column,
+                   ROW_FOUR[1]["label"], ROW_FOUR[1]["headline"],
+                   ROW_FOUR[1]["body"], FONTS["head"], 33,
+                   FONTS["body"], 19)
+    y = max(first, second) + 4
 
-    # ---- news tape ------------------------------------------------------
+    # News tape -----------------------------------------------------------
     band_top = y
-    band_h = 84
-    d.rectangle([(SIDE, band_top), (PAGE_W - SIDE, band_top + band_h)],
-                fill=BAND)
-    ty = band_top + 8
-    for line in TAPE_LINES:
-        for seg in fit_lines(d, line, F_TAPE, COL_W - 20):
-            d.text((SIDE + 10, ty), seg, font=F_TAPE, fill=BAND_TEXT)
-            ty += 20
-    y = band_top + band_h + 6
+    band_height = 84
+    draw.rectangle([(MARGIN, band_top),
+                    (WIDTH - MARGIN, band_top + band_height)],
+                   fill=TAPE_BG)
+    text_y = band_top + 8
+    for item in TAPE:
+        for line in wrap(draw, item, FONTS["tape"], TEXT_WIDTH - 20):
+            draw.text((MARGIN + 10, text_y), line,
+                      font=FONTS["tape"], fill=TAPE_FG)
+            text_y += 20
+    y = band_top + band_height + 6
 
-    # ---- footer: what the page covers and where it comes from ----------
-    foot = ("REPORTED 21\u201322 NOVEMBER 2026  \u00b7  SOURCES: REUTERS, AP, "
-            "CNN, USGS, UKMTO, IRAQ SECURITY MEDIA CELL")
-    fw = d.textlength(foot, font=F_FOOT)
-    d.text(((PAGE_W - fw) / 2, y), foot, font=F_FOOT, fill=MUTED)
+    # Footer --------------------------------------------------------------
+    centred(draw, y, FOOTER, FONTS["footer"], GREY)
     y += 14
 
-    if y > PAGE_H - 8:
+    if y > HEIGHT - 8:
         raise SystemExit("layout overflow: content ends at y=%d" % y)
-    return img
+    return page
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args(argv)
-    out = args.out or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "entry.png")
-    img = render()
-    img.save(out, format="PNG", optimize=True)
-    print("wrote %s (%dx%d)" % (out, PAGE_W, PAGE_H))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", default=None)
+    args = parser.parse_args(argv)
+    if args.out:
+        out_path = args.out
+    else:
+        out_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "entry.png")
+    page = build_page()
+    page.save(out_path, format="PNG", optimize=True)
+    print("wrote %s (%dx%d)" % (out_path, WIDTH, HEIGHT))
     return 0
 
 
